@@ -1,6 +1,6 @@
 ---
 title: Reanalyzing "Where do Smart Cities grow? The spatial and socio-economic configurations
-  of smart city development" (Duygan et al.) in a Bayesian Regression Framework
+  of smart city development" (Duygan et al. 2022) in a Bayesian Regression Framework
 author: "Mario Angst"
 date: "1/14/2022"
 output: html_document
@@ -26,6 +26,8 @@ The article looks at 22 Swiss cities that have adopted at least one smart city p
 I was drawn to replicate this analysis first and foremost because the authors pose an interesting question with regard to urban policy-making. Smart city concepts are on the rise and understanding what drives the adoption of such concepts is interesting.
 
 Secondly, I have always wanted to reanalyze a QCA analysis in a Bayesian Data Analysis framework. There are some really interesting things to think about here and I feel it's most fruitful letting the models talk to each other in this specific case than getting hung up over the perceived general superiority of one or the other.
+
+This post is helped by some basic (but really only basic) knowledge of both regression modeling and QCA. It can be reproduced on https://github.com/marioangst/smart_city_repro 
 
 ## Reading in the data
 
