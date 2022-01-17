@@ -1,0 +1,280 @@
+---
+title: Reanalyzing "Where do Smart Cities grow? The spatial and socio-economic configurations
+  of smart city development" (Duygan et al.) in a Bayesian Regression Framework
+author: "Mario Angst"
+date: "1/14/2022"
+output: html_document
+bibliography: references.bib  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, comment = FALSE)
+library(here)
+library(here)
+library(dplyr)
+library(readr)
+library(ggplot2)
+library(GGally)
+```
+
+In this post, I am going to reanalyze some parts of the article "Where do Smart Cities grow? The spatial and socio-economic configurations of smart city development" by @Duygan2021 in a Bayesian Regression Framework. 
+
+The authors are interested in what drives cities to adopt so-called "smart city" projects. Especially, they look at configurations of city characteristics that lead to the adoption of a high number of smart city projects.
+
+The article looks at 22 Swiss cities that have adopted at least one smart city project and then models the number of smart city projects per city using a fuzzy-set qualitative comparative analysis.
+
+I was drawn to replicate this analysis first and foremost because the authors pose an interesting question with regard to urban policy-making. Smart city concepts are on the rise and understanding what drives the adoption of such concepts is interesting.
+
+Secondly, I have always wanted to reanalyze a QCA analysis in a Bayesian Data Analysis framework. There are some really interesting things to think about here and I feel it's most fruitful letting the models talk to each other in this specific case than getting hung up over the perceived general superiority of one or the other.
+
+## Reading in the data
+
+The authors provide the data in the form of a table (A1) contained within the appendix. 
+
+It is a mystery to me why in this day and age, data is not made available in a directly machine-readable format, but since it was only 22 cases, I converted the table by hand to a csv file. There was one error in the data the authors supplied as the category UBAN contained one case labeled "densely populated" instead of "densely populated areas".
+
+``` {r parse}
+df <- read_csv(here("data/raw.csv"))
+df$URBAN[df$URBAN == "Densely populated"] <- "Densely populated areas"
+df$URBAN <- factor(df$URBAN)
+df
+```
+
+We have the folloing variables per city:
+
+- SMART: The number of smart city project per city
+- POP: Population size
+- URBAN: A categorical measure (two categories) of urban density
+- NEWRDEVP: New residential development - the number of new residents per 1000 residents in 2016
+- SERVSEC: Share of tertiary sector employment
+- UNIRES: The absolute number of university research staff and students in a city
+- INTNETW: Absolute number of international networks a city is part of
+
+Let's look at some pairwise associations. Without any causal considerations, it becomes immediately clear that there are strong bivariate associations between many of the variables (the correlations should be taken with a grain of salt in the plot though), which we have to keep in mind going forward, if we intend to treat them as predictors for the number of smart city projects per city (SMART).
+
+Basically the URBAN (population density, two categories), POP (city population) and UNIRES (number of university students and research staff in city) variables are almost measuring the same higher-level dimension in this sample, which I am tempted to call "smallness". There are no small cities with universities (the two there are are part of an agglomeration next to a larger one). There also is only a single smaller city that is densely populated, except for the two cities that are part of a larger urban agglomeration.
+
+
+```{r}
+GGally::ggpairs(df, columns = colnames(df)[-1])
+```
+
+In the manuscript, the authors carry out a number of well documented preprocessing steps where they essentially convert all variables to categorical variables, which they call calibration (a slightly confusing label to me). 
+The set-theoretic nature of their method (fQCA) requires this categorization. I cannot say I am a fan of reducing variation in this way for every variable. We do not have to do this.
+
+It is important to consider here that the authors use this categorization step to encode a number of assumptions into their binning of the variables however (again, well documented within the article). To me, it seems a definite weakness of the fQCA approach that it is necessary to bin _every_ variable, but some of the theory-informed transformations can in my opinion also be a strength of the approach, as it forces the researcher to consider the nature of every variable carefully. Something we could all do more of. 
+
+I will try to reflect one important assumption made in this preprocessing step in modeling. It's assumed that cities with a single project are in a different category than cities with more than a single project, so there is something like a phase shift to actually being "smart" when cities go beyond a single (potentially showcase, as the article argues) project.
+
+## Step back: What does it mean to replicate a configurational analysis?
+
+It might be tempting for a replication to just throw all variables the authors use in a regression model and call it a day. There are two main reasons _not_ to do this:
+
+- We should not construct models in this way in general (see section causal considerations) and especially when we are dealing with a set of variables that are highly predictive of each other.
+
+- The original article is not in search of contributions of individual variables, but configurations of variables that somehow lead to more smart city projects. This can not be fully replicated in a regression framework, but it can be approached (I'll show a way in the end). fQCA promises clear answers here - some combinations of levels of categorical variables can be found to be associated with some levels of the outcome. That's the power of set theory, I guess. We cannot offer this in kind of clarity. What a standard statistical approach can bring to the table however is a measure of uncertainty in our results, we do not need to unnecessarily reduce variation in variables in preprocessing and we can complement the configurational analysis by looking at marginal contributions of variables.
+
+## Causal considerations
+
+There are some serious causal considerations to make here. I am not well versed enough in QCA methods to judge whether they apply for set theoretic methods as well, but if we want to assess the configurations of city characteristics that influence an outcome, it seems that including variables that are highly co-dependent without a clear causal model is probably also not very helpful. 
+
+As such, we should probably think about a directed acyclic graph in this context. A good intro and further references can be found here https://cran.r-project.org/web/packages/ggdag/vignettes/intro-to-dags.html and in @PearlMackenzie18. I'd make the following causal assumptions:
+
+The actors provide arguments in the article for a causal association of all their variables with the number of smart city projects, so these are all included.
+
+I also included four additional likely, testable causal relationships, which seem fairly obvious:
+
+- Population size (POP) influences urban density (URBAN)
+- Population size influences the absolute number of university staff and students (UNIRES)
+- Lots of new residential development (NEWRDEVP) is likely leading to more urban density (URBAN)
+- A higher absolute number of university staff (SERVSEC) and students likely leads to a larger service sector (SERVSEC)
+
+Let's plot the DAG using ggdag [@ggdag].
+
+```{r}
+library(ggdag)
+
+dag <- dagify(SMART ~ POP,
+              URBAN ~ POP,
+              UNIRES ~ POP,
+              SMART ~ URBAN,
+              URBAN ~ NEWRDEVP,
+              SMART ~ NEWRDEVP ,
+              SMART ~ SERVSEC,
+              SERVSEC ~ UNIRES,
+              SMART ~ UNIRES,
+              SMART ~ INTNETW,
+              exposure = "URBAN",
+              outcome = "SMART")
+
+ggdag(dag, node_size = 0, text_col = "black") + theme_dag()
+
+```
+
+The point of a DAG is to inform our modeling here. For example, we can check, given this DAG, that there is one minimal sufficient adjustment set if we would want to look at the unbiased effect of population size:
+
+```{r}
+ggdag_adjustment_set(dag, exposure = "URBAN", outcome = "SMART", shadow = TRUE, text_col = "black") + theme_dag()
+```
+
+Good. But what happens if we just throw in all the variables and want to assess the effect of population size? This does not work. There is no way to de-confound here. What do we learn from this? We cannot just throw all variables into the mix and infer the direct causal effect of population size. 
+
+```{r}
+dag %>% 
+  adjust_for(c("INTNETW", "NEWRDEVP","URBAN","UNIRES","SERVSEC")) %>% 
+  ggdag_adjustment_set(exposure = "POP", outcome = "SMART", shadow = TRUE,
+                       text_col = "black") + theme_dag()
+```
+I only included measured variables here and this already creates trouble. Let's ignore the possibility of unknown confounders for this exercise.
+
+The original article puts emphasis on the combination of high density, a large service sector and presence of universities. What would we need to adjust for to get the unbiased effects for those, given the DAG?
+
+```{r}
+dag %>% 
+  ggdag_adjustment_set(exposure = c("URBAN","SERVSEC","UNIRES"),
+                       outcome = "SMART", shadow = TRUE,
+                       text_col = "black") + theme_dag()
+```
+
+Good news - we have a bit of leeway here.
+
+## A brms model
+
+So now that we have a causal model idea to inform our statistical modeling, let's actually build one. We'll use brms [@brms] for our modeling because it's amazing. I will also omit some important parts of the Bayesian reporting guidelines [@Kruschke2021] here for brevity.
+
+We'll preprocess a little bit for better modeling and for some sensible assumptions. It's common to log population size.
+
+```{r}
+df$POP_log <- log(df$POP)
+```
+
+We also put predictors on a comparable scale by centering and dividing by 2 standard deviations [@Gelman2008].
+
+```{r}
+df$NEWRDEVP_stand <- arm::rescale(df$NEWRDEVP)
+df$SERVSEC_stand <- arm::rescale(df$SERVSEC)
+df$UNIRES_stand <- arm::rescale(df$UNIRES)
+```
+
+
+Given that we are dealing with a count of projects as the outcome, we will use a Poisson regression model. We'll formulate a model that should let us look at the unbiased effect of URBAN, SERVSEC and UNIRES. Remember, we have to adjust for POP and NEWRDEVP.
+
+Further, the response is truncated (so zeros are not possible). Brms can handle that quite well using trunc().
+
+We have a really small sample size, so prior setting is super important [@McNeish2016]. We'll use
+fairly uninformative priors for the moment. One key thing we know is that large numbers of projects are unlikely, so we temper the expectations for large parameter values for our model a little bit by giving it normal(0,1) priors. Let's see what the model does with that.
+
+Let's run a model with only prior information (prior predictive check).
+
+```{r}
+library(brms)
+
+m_prior <-
+  brm(data = df, 
+      family = poisson,
+      SMART | trunc(lb = 1) ~ 1 + 
+        URBAN +
+        POP_log + 
+        NEWRDEVP_stand +
+        SERVSEC_stand +
+        UNIRES_stand,
+      prior = c(
+        prior(normal(0,1), class = Intercept),
+        prior(normal(0,1), class = b)
+      ),
+      sample_prior = "only",
+      backend = "cmdstanr",
+      iter = 2000, warmup = 1000, chains = 4, cores = 4,
+      silent = TRUE, refresh = 0) 
+```
+
+The prior predictive check indicates that while there are some silly high values, the general distribution looks relatively sensible. The blue bars in the plot below are the empirical distribution of counts of smart city projects per city. The black dots are 10 draws from the prior predictive distribution. It's what the model would predict before seeing the data.
+
+```{r}
+pp_check(m_prior, type = "bars", ndraws = 10)
+```
+
+Now let's actually fit the model.
+
+```{r}
+
+m1 <-
+  brm(data = df, 
+      family = poisson,
+      SMART | trunc(lb = 1) ~ 1 + 
+        URBAN +
+        POP_log + 
+        NEWRDEVP_stand +
+        SERVSEC_stand +
+        UNIRES_stand,
+      prior = c(
+        prior(normal(0,1), class = Intercept),
+        prior(normal(0,1), class = b)
+      ),
+      backend = "cmdstanr",
+      iter = 2000, warmup = 1000, chains = 4, cores = 4, 
+      silent = TRUE, refresh = 0) 
+
+```
+
+Let's look at how well our model predicts the outcome now (posterior predictive check). Looking good - quite an improvement over the prior only model. Again, black dots are predictions, but this time based on the posterior, after the model has seen the data. The model replicates the (truncated, there are no zeros) empirical distribution quite well, without overfitting too much.
+
+```{r}
+pp_check(m1, type = "bars", ndraws = 100)
+```
+
+
+## Results: Conditional effects - and configurations?
+
+Let's look at the conditional effects of high density, service sector size and university presence. Given our DAG, this is the effect of these variables (x axis) on the number of projects (y axis). It's the direct effect, given our DAG, because we are holding population size and new residential developments constant (adjust for it).
+
+```{r}
+conditional_effects(m1, effects = c("URBAN","SERVSEC_stand","UNIRES_stand"), prob = 0.88)
+```
+
+What about the configurations now? Well, our model allows us to simulate a number of outcomes for different values of the variables! The original article puts emphasis on the combination of high density, a large service sector and presence of universities. We can look at the differences the combinations of these variables make, based on our model.
+
+Look at this! It's a winning combination for sure. Holding population and new developments constant at the mean, our model predicts about 2 projects for minimum values of all the variables identified as a sufficient configuration in the article and about 19 (with a large uncertainty though ranging from 9 to 30 in the 88% credible interval) for maximum values of all values.
+
+```{r}
+
+predictions <-
+  predict(m1,probs = c(0.06,0.25,0.75,0.94) ,
+          newdata = data.frame(
+            URBAN = c("Intermediate density areas","Densely populated areas"),
+            NEWRDEVP_stand = rep(mean(df$NEWRDEVP_stand),2),
+            UNIRES_stand = c(min(df$UNIRES_stand),max(df$UNIRES_stand)),
+            POP_log = rep(mean(df$POP_log),2),
+            SERVSEC_stand = c(min(df$SERVSEC_stand),max(df$SERVSEC_stand))
+          ))
+
+data.frame(predictions) %>% 
+  mutate(config = c("urban + unires + servsec", "URBAN + UNIRES + SERVSEC")) %>% 
+  ggplot(aes(x = Estimate, y = config, xmin = Q6, xmax = Q94), height = .1) +
+  geom_point() + 
+  geom_errorbarh() +
+  xlab("Predicted number of projects with 88% credible interval")
+
+```
+
+
+
+## Conclusions - Weirdly useful models
+
+There is a lot more that could be done here - for example, we could model interactions or make predictions for variables that would require other model specifications, such as for POP. But that was not the main goal here and anyhow, we'd run into the limits of the data fairly quickly anyhow.
+
+To take a step back: What did we find overall? Well, the results, as far as we went and for the specific configuration of variables we looked are very much in line with Duygan et al. That was to be expected. The Bayesian regression framework was able to contribute a sense of uncertainty, which is very important in my opinion when dealing with such small sample sizes, and marginal contributions of variables.
+
+What is more interesting is how the two different models talk to each other. QCA is a "statistical" model in my opinion, just a slightly weird one that requires preprocessing of all variables to binary or categorical, sees the world only in interactions and has no satisfying concept of uncertainty. It's never going to be my piece of cake. However, interacting with it in the context of this reanalysis was interesting and made me see it in a different light. 
+
+First of all, QCA is a model and it's weird way of looking at the world can likely give you insights that jump at you right away that you might miss otherwise. It's weirdly useful. For example, the QCA results pointed to insights about configurations of variables straight away. I would be unsatisfied only relying on QCA results in an analysis but we have to be fair here - good QCA studies do  not stop when they have gotten some configuration, but qualitatively discuss their results in detail (made possible by oftentimes small sample sizes), which has to be considered part of the QCA process, as far as I know.
+
+Second, and I have no time to really think this through, but I think a QCA model could be used to inform a causal model (like the DAG used in this exercise) before statistical modeling somehow, even if it's only in relation to the response. The weird preprocessing and consideration of all interactions does some interesting things here.
+
+Duygan et al. threw in all the variables they had in their model without thinking about confounding. That seems to be the general approach in QCA studies. But that does have nothing to do with QCA - it's sadly commonly done in all kinds of modeling.
+
+## BONUS: What about cities without any smart city projects?
+
+A key limitation of Duygan et al. is the fact that they did not consider cities with no smart city projects. I think that is where the Bayesian regression models sketched out in this exercise would be very capable in extending the analysis. It should be easy to gather the additional cities left out of the analysis and do a joint model not only of counts of projects truncated at one but also consider what leads to cities "getting over the hump" in starting their first project. Maybe for a later time.
+
+# References
